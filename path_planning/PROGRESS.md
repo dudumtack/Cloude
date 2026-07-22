@@ -26,13 +26,14 @@ make run          # 또는: cmake -B build && cmake --build build && ./build/run
 - `getGps()` / `getGoalGps()` + 전역 `current_x/current_y`, `goal_x/goal_y`
   — **사용자 소유 스텁. 실제 수신 로직 구현하지 말 것**(나중에 로봇개 ROS 토픽으로 교체).
   `current_x=위도, current_y=경도` 규약. goal 스텁은 현재 위치 북동쪽 ~20m 지점.
-- `getObstacleCount()` / `getObstacle(id)` + 전역 `obstacle_count`, `obstacle_dist/dir/width`
+- `getObstacleCount()` / `getObstacle(id)` + 전역 `obstacle_count`, `obstacle_{a,b}_{dist,dir}`
   — **사용자 소유 스텁**(센서/토픽에서 옴). 장애물 여러 개 → id(0부터)로 조회.
-  거리(m), 방향(라디안: 0=북, 시계+), 가로 길이(m). 아직 미사용.
+  장애물의 보이는 면을 **양 끝점 A/B 선분**(각각 거리 m + 방향 rad)으로 표현
+  — 사선 장애물 대응. 방향 규약: 0=북, 시계+. 아직 미사용.
 - `gpsToCell()` — GPS(위경도) → 원점 기준 셀 인덱스.
 - `makeCurrentCell()` / `makeGoalCell()` / `buildCells()` — 현재/목적지 GPS로 셀 생성(현재 위치 = 원점).
-- `obstacleToCells()` — 장애물 1개(거리·방향·폭)를 원점 기준 셀 목록으로 변환.
-  폭은 시선에 수직으로 해석, 반 칸 간격 샘플링. 아직 미사용.
+- `obstacleToCells()` — 장애물 1개(끝점 A/B)를 원점 기준 셀 목록으로 변환.
+  A~B 선분을 반 칸 간격 샘플링. 아직 미사용.
 - `planPath()` — 지금은 GPS→셀까지만 호출하고 **빈 경로 `{}` 반환**(A\* 루프 미구현).
 
 ## 설계 결정 / 제약 (이어갈 때 지킬 것)

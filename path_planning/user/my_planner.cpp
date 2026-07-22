@@ -86,15 +86,17 @@ goal_y = 127.089100;  // 현재 위치에서 동쪽으로 약 19m
 
 // 장애물 정보 (getObstacle이 채움 — 나중에 센서/토픽 값으로 교체)
 // 장애물이 여러 개일 수 있어 id(0부터 시작)로 하나씩 조회하는 방식.
-//   obstacle_count : 장애물 개수 (getObstacleCount가 채움)
-//   obstacle_dist  : id번 장애물과 떨어진 거리 (m)
-//   obstacle_dir   : id번 장애물 방향 (라디안). 0 = 북쪽(+y), 시계 방향 양수(동쪽 = +π/2).
-//                    ※ 규약은 가정일 뿐 — 통합 때 실제 센서 규약에 맞춰 조정.
-//   obstacle_width : id번 장애물의 가로 길이 (m)
-static int    obstacle_count = 0;
-static double obstacle_dist  = 0.0;
-static double obstacle_dir   = 0.0;
-static double obstacle_width = 0.0;
+// 장애물의 "보이는 면"을 양 끝점 A, B 선분으로 표현 → 사선 장애물도 그대로 담김.
+//   obstacle_count  : 장애물 개수 (getObstacleCount가 채움)
+//   obstacle_a_dist : 끝점 A까지 거리 (m)
+//   obstacle_a_dir  : 끝점 A 방향 (라디안). 0 = 북쪽(+y), 시계 방향 양수(동쪽 = +π/2).
+//                     ※ 규약은 가정일 뿐 — 통합 때 실제 센서 규약에 맞춰 조정.
+//   obstacle_b_dist / obstacle_b_dir : 끝점 B (규약 동일)
+static int    obstacle_count  = 0;
+static double obstacle_a_dist = 0.0;
+static double obstacle_a_dir  = 0.0;
+static double obstacle_b_dist = 0.0;
+static double obstacle_b_dir  = 0.0;
 
 void getObstacleCount() {
 //장애물 개수 받아오는 로직도 나중에 통합할때 할꺼임
@@ -103,15 +105,15 @@ obstacle_count = 2;
 
 void getObstacle(int id) {
 //장애물 정보 받아오는 로직도 나중에 통합할때 할꺼임 (센서/토픽에서 옴)
-//id번(0부터) 장애물의 정보를 전역에 채운다
+//id번(0부터) 장애물의 양 끝점을 전역에 채운다
 if (id == 0) {
-    obstacle_dist  = 5.0;              // 5m 거리
-    obstacle_dir   = 0.78539816339;    // π/4 = 북동쪽
-    obstacle_width = 2.0;              // 가로 2m
+    // 정면 폭 ~2m 장애물 (시선에 수직에 가까움)
+    obstacle_a_dist = 5.1;   obstacle_a_dir = 0.98;   // 끝점 A
+    obstacle_b_dist = 5.1;   obstacle_b_dir = 0.59;   // 끝점 B
 } else if (id == 1) {
-    obstacle_dist  = 15.0;             // 15m 거리
-    obstacle_dir   = 1.04719755120;    // π/3 = 동북동쪽
-    obstacle_width = 1.5;              // 가로 1.5m
+    // 사선으로 놓인 ~2.5m 벽
+    obstacle_a_dist = 14.0;  obstacle_a_dir = 1.10;   // 끝점 A
+    obstacle_b_dist = 16.0;  obstacle_b_dir = 1.00;   // 끝점 B
 }
 }
 
@@ -147,30 +149,28 @@ static void buildCells(Cell& start_cell, Cell& goal_cell, CellSize cell = CellSi
     goal_cell  = makeGoalCell(cell);
 }
 
-// 장애물 하나(거리 m, 방향 rad, 가로 길이 m)를 원점 기준 셀 목록으로 변환.
+// 장애물 하나(양 끝점 A, B — 각각 거리 m + 방향 rad)를 원점 기준 셀 목록으로 변환.
 //   방향 규약: 0 = 북쪽(+y), 시계 방향 양수 → 동쪽 성분 = sin(dir), 북쪽 성분 = cos(dir).
-//   가로 길이는 시선(방향)에 수직인 폭으로 해석 — 센서가 보는 장애물의 정면 폭.
-//   폭을 셀 반 칸 간격으로 샘플링해 걸치는 셀을 전부 모은다(빈틈 방지).
-static std::vector<Cell> obstacleToCells(double dist, double dir, double width,
+//   A~B 선분을 셀 반 칸 간격으로 샘플링해 걸치는 셀을 전부 모은다(빈틈 방지).
+static std::vector<Cell> obstacleToCells(double a_dist, double a_dir,
+                                         double b_dist, double b_dir,
                                          CellSize cell = CellSize{}) {
-    double ux = std::sin(dir);          // 시선 단위벡터: 동쪽 성분
-    double uy = std::cos(dir);          //               북쪽 성분
-    double center_x = dist * ux;        // 장애물 중심 (미터, 원점 기준)
-    double center_y = dist * uy;
+    double ax = a_dist * std::sin(a_dir);   // 끝점 A (미터, 원점 기준)
+    double ay = a_dist * std::cos(a_dir);
+    double bx = b_dist * std::sin(b_dir);   // 끝점 B
+    double by = b_dist * std::cos(b_dir);
 
-    double px = uy;                     // 폭 방향 = 시선에 수직 (동쪽 성분)
-    double py = -ux;                    //                       (북쪽 성분)
-
+    double len  = std::sqrt((bx - ax) * (bx - ax) + (by - ay) * (by - ay));  // 선분 길이 (m)
     double mpu  = metersPerUnit(cell.unit);
     double step = 0.5 * ((cell.w < cell.h) ? cell.w : cell.h) * mpu;  // 셀 반 칸 (미터)
 
-    int n = (width > 0.0) ? static_cast<int>(std::ceil(width / step)) : 0;  // 샘플 구간 수
+    int n = (len > 0.0) ? static_cast<int>(std::ceil(len / step)) : 0;  // 샘플 구간 수
 
     std::vector<Cell> out;
     for (int i = 0; i <= n; ++i) {
-        double t = -width / 2.0 + (n > 0 ? width * i / n : 0.0);  // -w/2 ~ +w/2
-        double sx_m = center_x + t * px;
-        double sy_m = center_y + t * py;
+        double t = (n > 0) ? static_cast<double>(i) / n : 0.0;  // 0(A) ~ 1(B)
+        double sx_m = ax + (bx - ax) * t;
+        double sy_m = ay + (by - ay) * t;
         Cell c{ static_cast<int>(std::lround(sx_m / (cell.w * mpu))),
                 static_cast<int>(std::lround(sy_m / (cell.h * mpu))) };
         if (out.empty() || out.back() != c) out.push_back(c);  // 연속 중복 제거
