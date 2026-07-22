@@ -54,6 +54,11 @@ static Node makeNode(Cell pos, double g = 0.0, double h = 0.0, int parent = -1) 
     return n;
 }
 
+void getGps(&current_x, &current_y) {
+//gps 받아오는 로직 구현하지 마셈 나중에 로봇개랑 통합할때 할꺼임
+&current_x = 36.994720;
+&current_y = 127.088890;
+}
 Path planPath(const Grid& grid, Cell start, Cell goal) {
     (void)grid;
     (void)start;
