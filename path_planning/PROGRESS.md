@@ -31,6 +31,8 @@ make run          # 또는: cmake -B build && cmake --build build && ./build/run
   거리(m), 방향(라디안: 0=북, 시계+), 가로 길이(m). 아직 미사용.
 - `gpsToCell()` — GPS(위경도) → 원점 기준 셀 인덱스.
 - `makeCurrentCell()` / `makeGoalCell()` / `buildCells()` — 현재/목적지 GPS로 셀 생성(현재 위치 = 원점).
+- `obstacleToCells()` — 장애물 1개(거리·방향·폭)를 원점 기준 셀 목록으로 변환.
+  폭은 시선에 수직으로 해석, 반 칸 간격 샘플링. 아직 미사용.
 - `planPath()` — 지금은 GPS→셀까지만 호출하고 **빈 경로 `{}` 반환**(A\* 루프 미구현).
 
 ## 설계 결정 / 제약 (이어갈 때 지킬 것)

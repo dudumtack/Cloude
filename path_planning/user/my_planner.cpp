@@ -147,6 +147,37 @@ static void buildCells(Cell& start_cell, Cell& goal_cell, CellSize cell = CellSi
     goal_cell  = makeGoalCell(cell);
 }
 
+// 장애물 하나(거리 m, 방향 rad, 가로 길이 m)를 원점 기준 셀 목록으로 변환.
+//   방향 규약: 0 = 북쪽(+y), 시계 방향 양수 → 동쪽 성분 = sin(dir), 북쪽 성분 = cos(dir).
+//   가로 길이는 시선(방향)에 수직인 폭으로 해석 — 센서가 보는 장애물의 정면 폭.
+//   폭을 셀 반 칸 간격으로 샘플링해 걸치는 셀을 전부 모은다(빈틈 방지).
+static std::vector<Cell> obstacleToCells(double dist, double dir, double width,
+                                         CellSize cell = CellSize{}) {
+    double ux = std::sin(dir);          // 시선 단위벡터: 동쪽 성분
+    double uy = std::cos(dir);          //               북쪽 성분
+    double center_x = dist * ux;        // 장애물 중심 (미터, 원점 기준)
+    double center_y = dist * uy;
+
+    double px = uy;                     // 폭 방향 = 시선에 수직 (동쪽 성분)
+    double py = -ux;                    //                       (북쪽 성분)
+
+    double mpu  = metersPerUnit(cell.unit);
+    double step = 0.5 * ((cell.w < cell.h) ? cell.w : cell.h) * mpu;  // 셀 반 칸 (미터)
+
+    int n = (width > 0.0) ? static_cast<int>(std::ceil(width / step)) : 0;  // 샘플 구간 수
+
+    std::vector<Cell> out;
+    for (int i = 0; i <= n; ++i) {
+        double t = -width / 2.0 + (n > 0 ? width * i / n : 0.0);  // -w/2 ~ +w/2
+        double sx_m = center_x + t * px;
+        double sy_m = center_y + t * py;
+        Cell c{ static_cast<int>(std::lround(sx_m / (cell.w * mpu))),
+                static_cast<int>(std::lround(sy_m / (cell.h * mpu))) };
+        if (out.empty() || out.back() != c) out.push_back(c);  // 연속 중복 제거
+    }
+    return out;
+}
+
 Path planPath(const Grid& grid, Cell start, Cell goal) {
     getGps();       // current_x, current_y 채움
     getGoalGps();   // goal_x, goal_y 채움
