@@ -54,15 +54,35 @@ static Node makeNode(Cell pos, double g = 0.0, double h = 0.0, int parent = -1) 
     return n;
 }
 
-void getGps(&current_x, &current_y) {
+// 현재 위치 GPS (getGps가 채움 — 나중에 로봇개 토픽 값으로 교체)
+static double current_x = 0.0;
+static double current_y = 0.0;
+
+// 목적지 GPS (getGoalGps가 채움 — 나중에 토픽/입력으로 교체)
+static double goal_x = 0.0;
+static double goal_y = 0.0;
+
+void getGps() {
 //gps 받아오는 로직 구현하지 마셈 나중에 로봇개랑 통합할때 할꺼임
-&current_x = 36.994720;
-&current_y = 127.088890;
+current_x = 36.994720;
+current_y = 127.088890;
 }
+
+void getGoalGps() {
+//목적지 gps 받아오는 로직도 나중에 통합할때 할꺼임
+goal_x = 0.0;
+goal_y = 0.0;
+}
+
 Path planPath(const Grid& grid, Cell start, Cell goal) {
+    getGps();       // current_x, current_y 채움
+    getGoalGps();   // goal_x, goal_y 채움
+
     (void)grid;
     (void)start;
     (void)goal;
+    (void)current_x; (void)current_y;
+    (void)goal_x;    (void)goal_y;
     return {};
 }
 
