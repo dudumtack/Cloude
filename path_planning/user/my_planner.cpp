@@ -84,6 +84,22 @@ goal_x = 36.994900;   // 현재 위치에서 북쪽으로 약 20m
 goal_y = 127.089100;  // 현재 위치에서 동쪽으로 약 19m
 }
 
+// 장애물 정보 (getObstacle이 채움 — 나중에 센서/토픽 값으로 교체)
+//   obstacle_dist  : 장애물과 떨어진 거리 (m)
+//   obstacle_dir   : 장애물 방향 (라디안). 0 = 북쪽(+y), 시계 방향 양수(동쪽 = +π/2).
+//                    ※ 규약은 가정일 뿐 — 통합 때 실제 센서 규약에 맞춰 조정.
+//   obstacle_width : 장애물의 가로 길이 (m)
+static double obstacle_dist  = 0.0;
+static double obstacle_dir   = 0.0;
+static double obstacle_width = 0.0;
+
+void getObstacle() {
+//장애물 정보 받아오는 로직도 나중에 통합할때 할꺼임 (센서/토픽에서 옴)
+obstacle_dist  = 5.0;              // 5m 앞
+obstacle_dir   = 0.78539816339;    // π/4 = 북동쪽
+obstacle_width = 2.0;              // 가로 2m
+}
+
 // GPS 좌표(위도 lat, 경도 lon)를 원점(origin) 기준 셀 인덱스로 변환.
 //   위도 1도 ≈ 111320 m, 경도 1도 ≈ 111320*cos(위도) m.
 //   원점 대비 미터 오프셋을 "셀 크기(미터 환산)"로 나눠 인덱스를 만든다.

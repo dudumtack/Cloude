@@ -25,7 +25,9 @@ make run          # 또는: cmake -B build && cmake --build build && ./build/run
 - `Node{pos,g,h,f,parent}` + `makeNode()` — 가변 셀(parent는 인덱스, 향후 `vector<Node>` 풀용).
 - `getGps()` / `getGoalGps()` + 전역 `current_x/current_y`, `goal_x/goal_y`
   — **사용자 소유 스텁. 실제 수신 로직 구현하지 말 것**(나중에 로봇개 ROS 토픽으로 교체).
-  `current_x=위도, current_y=경도` 규약.
+  `current_x=위도, current_y=경도` 규약. goal 스텁은 현재 위치 북동쪽 ~20m 지점.
+- `getObstacle()` + 전역 `obstacle_dist/dir/width` — **사용자 소유 스텁**(센서/토픽에서 옴).
+  거리(m), 방향(라디안: 0=북, 시계+), 가로 길이(m). 아직 미사용.
 - `gpsToCell()` — GPS(위경도) → 원점 기준 셀 인덱스.
 - `makeCurrentCell()` / `makeGoalCell()` / `buildCells()` — 현재/목적지 GPS로 셀 생성(현재 위치 = 원점).
 - `planPath()` — 지금은 GPS→셀까지만 호출하고 **빈 경로 `{}` 반환**(A\* 루프 미구현).
