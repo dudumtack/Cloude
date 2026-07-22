@@ -19,6 +19,21 @@ static double stepCost(Cell from, Cell to, CellSize cell = CellSize{}) {
     return std::sqrt(dx * dx + dy * dy);
 }
 
+// g(x): 시작점부터 to 까지 실제 누적 비용 (부모 g + 한 스텝 비용).
+static double gCost(double parent_g, Cell from, Cell to, CellSize cell = CellSize{}) {
+    return parent_g + stepCost(from, to, cell);
+}
+
+// h(x): x 에서 goal 까지 추정 비용. 8방향 옥타일 거리를 직사각형으로 일반화.
+static double hCost(Cell x, Cell goal, CellSize cell = CellSize{}) {
+    int dx = std::abs(x.x - goal.x);
+    int dy = std::abs(x.y - goal.y);
+    int dmin = (dx < dy) ? dx : dy;
+    double diag = std::sqrt(cell.w * cell.w + cell.h * cell.h);
+    double straight = (dx > dy) ? (dx - dy) * cell.w : (dy - dx) * cell.h;
+    return dmin * diag + straight;   // 대각선 dmin번 + 남는 축 직선
+}
+
 // 가변 셀: 위치(고정) + 탐색 중 갱신되는 비용/부모.
 struct Node {
     Cell   pos;
