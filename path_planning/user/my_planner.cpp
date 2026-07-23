@@ -119,6 +119,34 @@ if (id == 0) {
 }
 }
 
+// 동적(움직이는) 장애물 정보 (getDynObstacle이 채움 — 나중에 추적기/센서 값으로 교체)
+// 위치 + 진행 방향 + 속도로 표현. id(0부터)로 하나씩 조회.
+//   dyn_count   : 동적 장애물 개수 (getDynObstacleCount가 채움)
+//   dyn_dist    : 장애물까지 거리 (m)
+//   dyn_bearing : 장애물이 "있는" 방위 (라디안, 0=북/시계+) — 거리와 함께 위치를 정함
+//   dyn_heading : 장애물이 "가는" 진행 방향 (라디안, 규약 동일) — dyn_bearing과 별개
+//   dyn_speed   : 장애물 속도 (m/s)
+static int    dyn_count   = 0;
+static double dyn_dist    = 0.0;
+static double dyn_bearing = 0.0;
+static double dyn_heading = 0.0;
+static double dyn_speed   = 0.0;
+
+void getDynObstacleCount() {
+//동적 장애물 개수 받아오는 로직도 나중에 통합할때 할꺼임
+dyn_count = 1;
+}
+
+void getDynObstacle(int id) {
+//동적 장애물 정보 받아오는 로직도 나중에 통합할때 할꺼임 (추적기/센서에서 옴)
+if (id == 0) {
+    dyn_dist    = 8.0;             // 8m 거리
+    dyn_bearing = 0.52;           // ~북북동에 위치 (있는 곳)
+    dyn_heading = 1.57079632679;  // π/2 = 동쪽으로 진행 (가는 곳)
+    dyn_speed   = 1.5;            // 1.5 m/s
+}
+}
+
 // GPS 좌표(위도 lat, 경도 lon)를 원점(origin) 기준 셀 인덱스로 변환.
 //   위도 1도 ≈ 111320 m, 경도 1도 ≈ 111320*cos(위도) m.
 //   원점 대비 미터 오프셋을 "셀 크기(미터 환산)"로 나눠 인덱스를 만든다.
@@ -199,6 +227,50 @@ inflateCost(const std::vector<Cell>& obstacle_cells) {
                 field[{o.x + dx, o.y + dy}] += add;   // 누적 (중복 허용)
             }
         }
+    }
+    return field;
+}
+
+// 동적 장애물 하나를 소프트 비용 층으로 변환.
+//   - 장애물 중심을 두 겹(체비쇼프 거리 1,2)으로 감싸 각 셀에 +0.7 (정적보다 더 크게 회피).
+//   - 진행 방향으로 "속도에 비례하는 거리"만큼 뻗으며, 각 셀에 "속도에 비례하는 비용"을
+//     추가 → 물체가 갈 곳을 미리 피하는 예측 위험구역.
+//   반환: (x,y) → 누적 소프트 비용. inflateCost 결과와 그대로 합칠 수 있음(중복 누적).
+static std::map<std::pair<int,int>, double>
+dynamicCost(double dist, double bearing, double heading, double speed,
+            CellSize cell = CellSize{}) {
+    std::map<std::pair<int,int>, double> field;
+
+    double mpu  = metersPerUnit(cell.unit);
+    double cx_m = dist * std::sin(bearing);   // 장애물 중심 (미터, 원점 기준)
+    double cy_m = dist * std::cos(bearing);
+    int ccx = static_cast<int>(std::lround(cx_m / (cell.w * mpu)));
+    int ccy = static_cast<int>(std::lround(cy_m / (cell.h * mpu)));
+
+    // (1) 두 겹 감싸기 → 0.7
+    for (int dy = -2; dy <= 2; ++dy) {
+        for (int dx = -2; dx <= 2; ++dx) {
+            int adx  = (dx < 0) ? -dx : dx;
+            int ady  = (dy < 0) ? -dy : dy;
+            int cheb = (adx > ady) ? adx : ady;
+            if (cheb == 1 || cheb == 2) field[{ccx + dx, ccy + dy}] += 0.7;
+        }
+    }
+
+    // (2) 진행 방향 예측 위험구역: 뻗는 거리 ∝ 속도, 셀 비용 ∝ 속도.
+    const double TIME_HORIZON = 2.0;   // 초: 몇 초 앞을 내다볼지
+    const double SPEED_GAIN   = 0.5;   // (m/s)당 더해줄 비용
+    double hx = std::sin(heading);     // 진행 단위벡터
+    double hy = std::cos(heading);
+    double step_m = ((cell.w < cell.h) ? cell.w : cell.h) * mpu;   // 한 칸(작은 축) 미터
+    double reach_m = speed * TIME_HORIZON;                          // 예측 이동 거리 (m)
+    int steps = (step_m > 0.0) ? static_cast<int>(std::lround(reach_m / step_m)) : 0;
+    for (int i = 1; i <= steps; ++i) {
+        double fx_m = cx_m + hx * i * step_m;
+        double fy_m = cy_m + hy * i * step_m;
+        int fx = static_cast<int>(std::lround(fx_m / (cell.w * mpu)));
+        int fy = static_cast<int>(std::lround(fy_m / (cell.h * mpu)));
+        field[{fx, fy}] += speed * SPEED_GAIN;                      // 속도 비례 비용
     }
     return field;
 }

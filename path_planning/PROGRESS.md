@@ -37,6 +37,12 @@ make run          # 또는: cmake -B build && cmake --build build && ./build/run
 - `inflateCost()` — 장애물 셀 주변 소프트 비용(inflation) 층.
   이웃(체비쇼프1)=+0.5, 바깥 한 겹(체비쇼프2)=+0.25, 중복 누적 허용.
   반환은 `(x,y)→비용` sparse map. 아직 미사용(A* 비용에 더할 예정).
+- `getDynObstacleCount()` / `getDynObstacle(id)` + 전역 `dyn_count`, `dyn_{dist,bearing,heading,speed}`
+  — **사용자 소유 스텁**(추적기/센서에서 옴). 동적 장애물 N개, id(0부터) 조회.
+  위치=`dist`+`bearing`(있는 방위), `heading`=진행 방향(별개), `speed` m/s. 방향 규약 0=북/시계+.
+- `dynamicCost()` — 동적 장애물 1개 → 소프트 비용 map.
+  중심 두 겹 감싸 +0.7, 진행 방향으로 속도 비례 거리만큼 뻗으며 속도 비례 비용 추가(예측 위험구역).
+  `inflateCost` 결과와 합칠 수 있음(중복 누적). 아직 미사용.
 - `planPath()` — 지금은 GPS→셀까지만 호출하고 **빈 경로 `{}` 반환**(A\* 루프 미구현).
 
 ## 설계 결정 / 제약 (이어갈 때 지킬 것)
