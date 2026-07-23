@@ -1,7 +1,8 @@
 # 진행 상황 & 인수인계 노트 (로봇개 경로 알고리즘)
 
 > 새 세션은 이 파일을 먼저 읽고 이어가면 됩니다.
-> 브랜치: `claude/robot-dog-project-3s09hc` · 저장소: `dudumtack/cloude`
+> 브랜치: `claude/path-planning-dstar` (D* Lite 트랙) · 저장소: `dudumtack/cloude`
+> 참고 브랜치: `claude/path-planning-astar` (A* 버전 보존).
 
 ## 무엇을 만들고 있나
 로봇개의 **2D 경로 알고리즘(A\*)** 을 개발 중.
@@ -51,14 +52,16 @@ make run          # 또는: cmake -B build && cmake --build build && ./build/run
   - `distanceTo()` — 목표까지 수평 거리(m).
   - `stepToward()` — 목표점 1개 향한 한 틱 명령(도착/회전/전진+보정). 상태 없이 매 틱 재판단.
   - **연결 예정**: A* 경로의 셀 웨이포인트를 "셀↔m 스케일"만으로 월드화(회전 불필요) 후 `stepToward`로 추종.
-- **A\* 본체** (`neighbors` / `softAt` / `aStar` + `CostField`) — **완성**.
-  - `neighbors()` — 8방향 이웃 + 대각선 모서리 뚫기 방지(validator 규칙 3-1 동일).
-  - `aStar()` — `Node` 풀(vector)+parent 인덱스, f 최소 힙(open list), lazy deletion,
-    g=`gCost`+소프트비용 / h=`hCost`, goal 도달 시 parent 거슬러 경로 복원.
-    `CostField soft` 인자로 `inflateCost`/`dynamicCost` 결과를 얹을 수 있음(기본 빈 맵).
-- `planPath()` — **하네스 grid/start/goal 위에서 `aStar` 실행** → 경로 반환.
+- **D\* Lite 본체** (`neighbors` / `softAt` / `CostField` + `struct DStarLite`) — **완성**.
+  - `neighbors()` — 8방향 이웃 + 대각선 모서리 뚫기 방지(validator 규칙 3-1 동일). (공용)
+  - `DStarLite` — 목표에서 역방향 탐색. 셀별 `g`/`rhs` 맵, 2요소 키 `[min(g,rhs)+h+km, min(g,rhs)]`,
+    lazy-deletion 우선순위 큐. `init`→`computeShortestPath`→`extractPath`.
+    `edgeCost` = `stepCost` + 소프트비용(양끝 절반, 대칭). `soft` 인자로 inflate/dynamic 얹음.
+    `km`·상태 멤버 보유 → 로봇 루프에서 매 틱 부분 재계획 가능(replan 훅은 다음 단계).
+- `planPath()` — **하네스 grid/start/goal 로 D\* Lite 1회 실행** → 경로 반환.
   GPS→셀(`buildCells`)은 여전히 호출하되 로봇 통합용 별도 트랙(아직 grid와 미연결).
-  **테스트 4/5 통과** (5번째 `unreachable`은 경로가 없는 게 정답 → `{}` 반환, 정상).
+  **테스트 4/5 통과, 경로 비용은 A\*와 동일(최적)**. 5번째 `unreachable`은 경로 없음이 정답(`{}`).
+- ※ `Node`/`makeNode`/`gCost` 는 A* 잔재라 D* 브랜치에선 미사용(경고). 재사용 여지 있어 남겨둠.
 
 ## 설계 결정 / 제약 (이어갈 때 지킬 것)
 - **GPS 함수는 사용자 것** — 로직 채우지 말고 가정만 유지.
@@ -69,14 +72,16 @@ make run          # 또는: cmake -B build && cmake --build build && ./build/run
 - 정사각형↔직사각형, m↔cm 전환은 `CellSize` 한 곳에서만 바꾸면 되도록 유지.
 
 ## 다음 할 일 (순서 제안)
-1. **격자 조립** — start/goal 바운딩 박스 + 마진으로 `Grid` 만들고, 정적/동적 장애물
+1. **D\* 재계획 훅** — `replan(new_start, changed_cells)`: `km += h(last_start,new_start)` 갱신,
+   비용 바뀐 셀 주변 `updateVertex` 후 `computeShortestPath` 재호출(부분 갱신). ← D*의 핵심 이점.
+2. **격자 조립** — start/goal 바운딩 박스 + 마진으로 `Grid` 만들고, 정적/동적 장애물
    셀(`obstacleToCells`)을 찍고 `inflateCost`/`dynamicCost`로 `CostField` 생성.
-2. **소프트 비용 A\*에 연결** — 위 `CostField`를 `aStar(grid,start,goal,cell,soft)`에 전달.
-3. **셀↔월드 브리지** — A\* 경로 셀을 월드(m)로(스케일만) 바꿔 `stepToward`로 주행.
-4. **통합 결정** — GPS→셀 트랙과 하네스 grid/start/goal 을 실제로 어떻게 연결할지.
-5. (선택) **4방향 모드** — 지금 A\*는 8방향 고정. `run_tests 4` 검증엔 대각선이 걸림.
+3. **소프트 비용 연결** — 위 `CostField`를 `planner.init(grid,start,goal,cell,soft)`로 전달.
+4. **셀↔월드 브리지** — 경로 셀을 월드(m)로(스케일만) 바꿔 `stepToward`로 주행.
+5. **통합 결정** — GPS→셀 트랙과 하네스 grid/start/goal 을 실제로 어떻게 연결할지.
+6. (선택) **4방향 모드** — 지금 8방향 고정. `run_tests 4` 검증엔 대각선이 걸림.
 
 ## 참고
-- `gCost`/`hCost`/`makeNode` 는 이제 `aStar`가 사용 → 관련 unused 경고 사라짐.
+- `hCost`/`stepCost` 는 D* Lite가 사용. `gCost`/`Node`/`makeNode` 는 A* 잔재라 미사용(경고 정상).
 - 아직 미사용(경고 정상): `obstacleToCells`, `inflateCost`, `dynamicCost`, 주행 함수들,
   동적/정적 장애물 스텁 — 격자 조립·주행 연결 단계에서 붙는다.

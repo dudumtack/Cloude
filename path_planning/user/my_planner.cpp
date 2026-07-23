@@ -337,7 +337,7 @@ static MoveCmd stepToward(double rx, double ry, double yaw, double tx, double ty
     return cmd;
 }
 
-// ───────────────────── A* 본체 ─────────────────────
+// ───────────────────── 탐색 공용 헬퍼 + D* Lite 본체 ─────────────────────
 
 // 소프트 비용 맵(inflateCost/dynamicCost 결과)을 합쳐 쓰는 타입.
 using CostField = std::map<std::pair<int,int>, double>;
@@ -370,55 +370,124 @@ static std::vector<Cell> neighbors(const Grid& grid, Cell c) {
     return out;
 }
 
-// A* 경로 탐색: start → goal 최소비용 경로를 셀 목록으로 반환(없으면 {}).
-//   - g = gCost(실제 이동) + soft(장애물 근접 소프트 비용), h = hCost(옥타일 추정).
-//   - Node 풀(vector) + parent 인덱스로 확장하고, 마지막에 parent를 거슬러 경로 복원.
-//   - open list = f 최소 힙. 이미 더 좋은 g로 방문한 셀은 건너뜀(lazy deletion).
-static Path aStar(const Grid& grid, Cell start, Cell goal,
-                  CellSize cell = CellSize{}, const CostField& soft = CostField{}) {
-    if (!grid.isFree(start) || !grid.isFree(goal)) return {};   // 시작/목표가 막힘
+// D* Lite 경로 탐색 (Koenig & Likhachev).
+//   - 목표에서 시작 방향으로 "역방향" 탐색. 각 셀에 g(목표까지 실제 비용)와
+//     rhs(이웃 기반 한 스텝 예측)를 두고, 둘이 다른 "불일치 셀"만 우선순위 큐로 갱신.
+//   - 지도가 바뀌면(장애물 발생) 바뀐 셀 주변만 다시 큐에 넣어 부분 재계산 → 재계획이 싸다.
+//   - km: 로봇이 움직여 start가 바뀔 때 키 보정용(1회 계산이면 0).
+//   상태를 멤버로 들고 있어 로봇 루프에서 매 틱 이어서 갱신할 수 있음.
+struct DStarLite {
+    using Key = std::pair<double, double>;          // 우선순위 키 (사전식 비교)
+    static constexpr double INF = 1e18;
 
-    std::vector<Node> pool;                        // 노드 풀 (parent = 이 벡터의 인덱스)
-    std::map<std::pair<int,int>, int> best;        // 셀 → 지금까지 최선(최소 g) 노드 인덱스
+    const Grid* grid = nullptr;
+    CellSize    cell;
+    CostField   soft;                               // 장애물 근접 소프트 비용(선택)
+    Cell start, goal;
+    double km = 0.0;                                // 키 보정치 (start 이동 누적)
 
-    // open list: (f, 풀 인덱스) 최소 힙.
-    using Item = std::pair<double, int>;
-    std::priority_queue<Item, std::vector<Item>, std::greater<Item>> open;
+    std::map<std::pair<int,int>, double> g_, rhs_;  // 셀 → g / rhs (없으면 INF)
 
-    pool.push_back(makeNode(start, 0.0, hCost(start, goal, cell), -1));
-    best[{start.x, start.y}] = 0;
-    open.push({ pool[0].f, 0 });
+    // 우선순위 큐 (lazy deletion): 권위 키 맵 + 최소 힙.
+    using QItem = std::pair<Key, std::pair<int,int>>;
+    std::map<std::pair<int,int>, Key> inU_;         // 현재 큐에 든 셀의 유효 키
+    std::priority_queue<QItem, std::vector<QItem>, std::greater<QItem>> U_;
 
-    while (!open.empty()) {
-        int idx = open.top().second;
-        open.pop();
-        Node cur = pool[idx];
-        std::pair<int,int> ckey{ cur.pos.x, cur.pos.y };
+    // ── 값 접근 ──
+    double gAt(Cell s) const   { auto it = g_.find({s.x, s.y});   return it == g_.end()   ? INF : it->second; }
+    double rhsAt(Cell s) const { auto it = rhs_.find({s.x, s.y}); return it == rhs_.end() ? INF : it->second; }
 
-        if (best[ckey] != idx) continue;   // 이 셀의 더 나은 노드가 이미 확정됨 → stale 스킵
+    // 인접 두 셀 이동 비용 (실제 거리 + 양끝 소프트 비용 절반씩 → 대칭 유지).
+    double edgeCost(Cell a, Cell b) const {
+        return stepCost(a, b, cell) + 0.5 * (softAt(soft, a) + softAt(soft, b));
+    }
 
-        if (cur.pos == goal) {             // 목표 도달 → parent 거슬러 경로 복원
-            Path path;
-            for (int i = idx; i != -1; i = pool[i].parent) path.push_back(pool[i].pos);
-            std::reverse(path.begin(), path.end());
-            return path;
-        }
+    // 키 계산: [ min(g,rhs) + h(start,s) + km ,  min(g,rhs) ]
+    Key calcKey(Cell s) const {
+        double k2 = std::min(gAt(s), rhsAt(s));
+        return { k2 + hCost(start, s, cell) + km, k2 };
+    }
 
-        for (Cell nb : neighbors(grid, cur.pos)) {
-            double g_new = gCost(cur.g, cur.pos, nb, cell) + softAt(soft, nb);
-            std::pair<int,int> nkey{ nb.x, nb.y };
-
-            auto it = best.find(nkey);
-            if (it != best.end() && pool[it->second].g <= g_new) continue;  // 기존이 더 좋음
-
-            int nidx = static_cast<int>(pool.size());
-            pool.push_back(makeNode(nb, g_new, hCost(nb, goal, cell), idx));
-            best[nkey] = nidx;
-            open.push({ pool[nidx].f, nidx });
+    // ── 큐 조작 (lazy deletion) ──
+    void qPush(Cell s, Key k) { inU_[{s.x, s.y}] = k; U_.push({ k, { s.x, s.y } }); }
+    void qErase(Cell s)       { inU_.erase({s.x, s.y}); }
+    void qClean() {                                  // 힙 top의 stale(무효) 항목 제거
+        while (!U_.empty()) {
+            const QItem& top = U_.top();
+            auto it = inU_.find(top.second);
+            if (it != inU_.end() && it->second == top.first) break;   // 유효한 top
+            U_.pop();
         }
     }
-    return {};   // open 이 비면 경로 없음
-}
+    Key  topKey()  { qClean(); return U_.empty() ? Key{INF, INF} : U_.top().first; }
+    Cell topCell() { qClean(); auto p = U_.top().second; return Cell{ p.first, p.second }; }
+    bool empty()   { qClean(); return U_.empty(); }
+
+    // rhs 갱신 후 큐 상태 맞추기 (불일치면 넣고, 일치면 뺀다).
+    void updateVertex(Cell u) {
+        if (!(u == goal)) {
+            double m = INF;
+            for (Cell s : neighbors(*grid, u)) m = std::min(m, edgeCost(u, s) + gAt(s));
+            rhs_[{u.x, u.y}] = m;
+        }
+        qErase(u);
+        if (std::fabs(gAt(u) - rhsAt(u)) > 1e-9) qPush(u, calcKey(u));   // 불일치 → 큐에
+    }
+
+    // 초기화: 목표 rhs=0 으로 놓고 큐에 넣음.
+    void init(const Grid& g, Cell s, Cell go,
+              CellSize c = CellSize{}, const CostField& sf = CostField{}) {
+        grid = &g; start = s; goal = go; cell = c; soft = sf; km = 0.0;
+        g_.clear(); rhs_.clear(); inU_.clear(); U_ = decltype(U_)();
+        rhs_[{goal.x, goal.y}] = 0.0;
+        qPush(goal, calcKey(goal));
+    }
+
+    // 최단경로 계산: start가 일관될 때까지 불일치 셀을 처리.
+    void computeShortestPath() {
+        long guard = 0, cap = 4000000;               // 안전 상한(무한 루프 방지)
+        while ((topKey() < calcKey(start)) ||
+               (std::fabs(rhsAt(start) - gAt(start)) > 1e-9)) {
+            if (empty() || ++guard > cap) break;
+            Cell u    = topCell();
+            Key  kOld = topKey();
+            Key  kNew = calcKey(u);
+            if (kOld < kNew) {                       // 키가 낡음 → 새 키로 재삽입
+                qPush(u, kNew);
+            } else if (gAt(u) > rhsAt(u) + 1e-9) {   // over-consistent → g를 rhs로 낮춤
+                g_[{u.x, u.y}] = rhsAt(u);
+                qErase(u);
+                for (Cell s : neighbors(*grid, u)) updateVertex(s);
+            } else {                                 // under-consistent → g를 INF로 올림
+                g_[{u.x, u.y}] = INF;
+                qErase(u);
+                updateVertex(u);
+                for (Cell s : neighbors(*grid, u)) updateVertex(s);
+            }
+        }
+    }
+
+    // start에서 g를 따라 내려가며 경로 추출 (없으면 {}).
+    Path extractPath() {
+        if (!grid->isFree(start) || !grid->isFree(goal)) return {};
+        if (gAt(start) >= INF) return {};            // 도달 불가
+        Path path;
+        Cell s = start;
+        path.push_back(s);
+        int cap = grid->width() * grid->height() + 2;   // 안전 상한
+        while (!(s == goal) && cap-- > 0) {
+            double best = INF; Cell next = s; bool found = false;
+            for (Cell n : neighbors(*grid, s)) {
+                double v = edgeCost(s, n) + gAt(n);
+                if (v < best) { best = v; next = n; found = true; }
+            }
+            if (!found || best >= INF) return {};    // 막힘
+            s = next;
+            path.push_back(s);
+        }
+        return (s == goal) ? path : Path{};
+    }
+};
 
 Path planPath(const Grid& grid, Cell start, Cell goal) {
     getGps();       // current_x, current_y 채움
@@ -428,9 +497,14 @@ Path planPath(const Grid& grid, Cell start, Cell goal) {
     buildCells(current_cell, goal_cell);   // GPS → 셀 (로봇 통합용 별도 트랙: 아직 grid와 미연결)
     (void)current_cell; (void)goal_cell;
 
-    // A* 본체: 하네스가 준 grid/start/goal 위에서 최소비용 경로 탐색.
-    // (장애물 소프트 비용을 쓰려면 aStar(..., cell, soft_field) 형태로 넘기면 됨.)
-    return aStar(grid, start, goal);
+    // D* Lite 본체: 하네스 grid/start/goal 위에서 최단경로 1회 계산.
+    // (로봇 루프에선 DStarLite 객체를 유지하며 매 틱 replan으로 부분 갱신 가능.
+    //  소프트 비용을 쓰려면 planner.init(grid, start, goal, cell, soft_field) 형태로.)
+    if (!grid.isFree(start) || !grid.isFree(goal)) return {};
+    DStarLite planner;
+    planner.init(grid, start, goal);
+    planner.computeShortestPath();
+    return planner.extractPath();
 }
 
 } // namespace planning
