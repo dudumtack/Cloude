@@ -98,6 +98,11 @@ path_planning/
 > 같은 rviz2 클릭→이동 예제)**와 이 저장소의 경로 알고리즘을 나란히 놓고 통합**할 때
 > 필요한 것들을 모아둔 것입니다. 세부 진행 로그는 `PROGRESS.md` 참고.
 > 브랜치: `claude/path-planning-dstar` (D* Lite). A* 버전은 `claude/path-planning-astar`.
+>
+> 📎 **완성된 통합 노드 예시**: `robot/dstar_goto.cpp` — 이 가이드(§6 로봇 루프 + §7 셀↔월드
+> 브리지)를 실제 Go2 odom·라이다·SportClient 에 배선한 참고 구현. `my_planner.cpp` 를
+> 그대로 `#include` 해 재사용하며, 방향 규약은 §3 옵션 B(odom 기준)를 택함. ROS 워크스페이스
+> 전용이라 이 하네스에선 빌드되지 않음(참고·이식용).
 
 ## 1. 지금 무엇이 완성돼 있나 (`user/my_planner.cpp`)
 
