@@ -61,6 +61,13 @@ make run          # 또는: cmake -B build && cmake --build build && ./build/run
   - **증분 재계획 완성**: `moveTo(new_start)`(km 보정) + `replan(changed_cells)`(바뀐 셀+이웃만
     updateVertex 후 computeShortestPath). 검증: replan 결과 = 처음부터 계산과 **비용 동일(최적)**,
     로봇 주행 메인 루프(이동 중 장애물 발견) 정상 도달, 30×30 국소변화 반복 시 **재계산 대비 ~12배 적게 확장**.
+- **격자 조립** (`LocalMap` + `buildLocalMap` + `toGrid`/`toCell`) — 로봇 트랙.
+  원점 기준 셀좌표(음수 가능)를 Grid의 0-기반 인덱스로 옮기는 단계.
+  - start/goal/장애물을 감싸는 바운딩 박스 + margin → 최소 모서리를 격자 (0,0)으로(=`offset`).
+  - `그리드인덱스 = 셀좌표 - offset`. 정적 장애물은 격자에 찍고, inflate/dynamic 소프트 비용은
+    offset 이동해 `LocalMap.soft`에 누적. 결과를 `planner.init(grid,start,goal,cell,soft)`에 그대로.
+  - 검증(스텁값 start(0,0)/goal(19,20)/margin5): 격자 **30×31**, offset **(-5,-5)**,
+    start 그리드**(5,5)**·goal**(24,25)**, 막힌 셀 7·소프트 셀 94, D*가 장애물 피한 유효 경로 산출.
 - `planPath()` — **하네스 grid/start/goal 로 D\* Lite 1회 실행** → 경로 반환.
   GPS→셀(`buildCells`)은 여전히 호출하되 로봇 통합용 별도 트랙(아직 grid와 미연결).
   **테스트 4/5 통과, 경로 비용은 A\*와 동일(최적)**. 5번째 `unreachable`은 경로 없음이 정답(`{}`).
@@ -75,14 +82,13 @@ make run          # 또는: cmake -B build && cmake --build build && ./build/run
 - 정사각형↔직사각형, m↔cm 전환은 `CellSize` 한 곳에서만 바꾸면 되도록 유지.
 
 ## 다음 할 일 (순서 제안)
-> D* Lite 알고리즘 자체는 **완성**(1회 계산 + 증분 재계획 + 로봇 메인 루프 검증). 이제 로봇 연결 단계.
-1. **격자 조립** — start/goal 바운딩 박스 + 마진으로 `Grid` 만들고, 정적/동적 장애물
-   셀(`obstacleToCells`)을 찍고 `inflateCost`/`dynamicCost`로 `CostField` 생성.
-2. **소프트 비용 연결** — 위 `CostField`를 `planner.init(grid,start,goal,cell,soft)`로 전달.
-3. **셀↔월드 브리지** — 경로 셀을 월드(m)로(스케일만) 바꿔 `stepToward`로 주행.
-4. **로봇 루프 배선** — 매 틱: 센서 장애물 변화 감지 → `moveTo`+`replan` → `extractPath` → `stepToward`.
-5. **통합 결정** — GPS→셀 트랙과 하네스 grid/start/goal 을 실제로 어떻게 연결할지.
-6. (선택) **4방향 모드** — 지금 8방향 고정. `run_tests 4` 검증엔 대각선이 걸림.
+> D* Lite 알고리즘 **완성** + **격자 조립 완성**(`buildLocalMap`). 이제 남은 건 주행 연결.
+1. **셀↔월드 브리지** — D* 경로 셀을 월드(m)로(스케일만) 바꿔 `stepToward`로 주행.
+   주의: 경로는 "그리드 인덱스" → `toCell(+offset)`로 원점기준 셀 → ×셀크기(m)로 월드.
+2. **로봇 루프 배선** — 매 틱: 센서 장애물 변화 → `buildLocalMap`/`replan` → `extractPath` → `stepToward`.
+3. **통합 결정** — GPS→셀 트랙과 하네스 grid/start/goal 을 실제로 어떻게 연결할지.
+4. (선택) **동적 장애물 중심 하드블록** — 현재 dynamicCost는 소프트만. 중심칸을 막을지 결정.
+5. (선택) **4방향 모드** — 지금 8방향 고정. `run_tests 4` 검증엔 대각선이 걸림.
 
 ## 참고
 - `hCost`/`stepCost` 는 D* Lite가 사용. `gCost`/`Node`/`makeNode` 는 A* 잔재라 미사용(경고 정상).

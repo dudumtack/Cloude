@@ -514,6 +514,82 @@ struct DStarLite {
     }
 };
 
+// ───────────────────── 격자 조립 (센서 입력 → D*가 훑을 로컬 지도) ─────────────────────
+// 문제: 우리 셀 좌표는 원점(현재 위치) 기준이라 음수도 나온다(예: 서쪽 = x<0).
+//       그런데 Grid 는 0..W-1 / 0..H-1 인덱스만 받는다.
+//   해결: start/goal/장애물을 모두 감싸는 바운딩 박스를 잡고, 그 최소 모서리를
+//         격자의 (0,0)으로 삼는다(offset). 즉  그리드인덱스 = 셀좌표 - offset.
+
+struct LocalMap {
+    Grid      grid;            // start/goal/장애물을 감싸는 로컬 격자
+    Cell      offset;          // 격자 (0,0) 이 가리키는 셀좌표  (셀좌표 = 그리드인덱스 + offset)
+    Cell      start;           // 그리드 인덱스로 옮긴 시작
+    Cell      goal;            // 그리드 인덱스로 옮긴 목표
+    CostField soft;            // 그리드 인덱스 기준 소프트 비용(inflate + dynamic)
+};
+
+static Cell toGrid(Cell c, Cell offset) { return Cell{ c.x - offset.x, c.y - offset.y }; }
+static Cell toCell(Cell g, Cell offset) { return Cell{ g.x + offset.x, g.y + offset.y }; }
+
+// start/goal 과 (스텁에서 읽은) 장애물들을 margin 여유를 두고 감싸는 로컬 격자를 만든다.
+static LocalMap buildLocalMap(Cell start_cell, Cell goal_cell,
+                              int margin = 5, CellSize cell = CellSize{}) {
+    // 1) 정적 장애물 → 셀 목록으로 모으기.
+    std::vector<Cell> obstacles;
+    getObstacleCount();
+    for (int id = 0; id < obstacle_count; ++id) {
+        getObstacle(id);
+        std::vector<Cell> cs = obstacleToCells(obstacle_a_dist, obstacle_a_dir,
+                                               obstacle_b_dist, obstacle_b_dir, cell);
+        obstacles.insert(obstacles.end(), cs.begin(), cs.end());
+    }
+
+    // 2) 동적 장애물 → 소프트 비용(셀좌표)으로 모으기(누적).
+    CostField dyn;
+    getDynObstacleCount();
+    for (int id = 0; id < dyn_count; ++id) {
+        getDynObstacle(id);
+        CostField f = dynamicCost(dyn_dist, dyn_bearing, dyn_heading, dyn_speed, cell);
+        for (const auto& kv : f) dyn[kv.first] += kv.second;
+    }
+
+    // 3) 바운딩 박스: start·goal·모든 장애물 셀·동적 비용 셀을 전부 포함 + margin.
+    int minx = std::min(start_cell.x, goal_cell.x), maxx = std::max(start_cell.x, goal_cell.x);
+    int miny = std::min(start_cell.y, goal_cell.y), maxy = std::max(start_cell.y, goal_cell.y);
+    auto include = [&](int x, int y) {
+        minx = std::min(minx, x); maxx = std::max(maxx, x);
+        miny = std::min(miny, y); maxy = std::max(maxy, y);
+    };
+    for (const Cell& c : obstacles)      include(c.x, c.y);
+    for (const auto& kv : dyn)           include(kv.first.first, kv.first.second);
+    minx -= margin; miny -= margin; maxx += margin; maxy += margin;
+
+    // 4) 격자 생성 + offset 결정.
+    LocalMap m;
+    m.offset = Cell{ minx, miny };
+    m.grid   = Grid(maxx - minx + 1, maxy - miny + 1);
+    m.start  = toGrid(start_cell, m.offset);
+    m.goal   = toGrid(goal_cell,  m.offset);
+
+    // 5) 정적 장애물 찍기(그리드 인덱스로 옮겨서).
+    for (const Cell& c : obstacles) {
+        Cell gc = toGrid(c, m.offset);
+        if (m.grid.inBounds(gc)) m.grid.setObstacle(gc, true);
+    }
+
+    // 6) 소프트 비용을 그리드 인덱스로 옮겨 담기(inflate 정적 + dynamic 동적, 누적).
+    CostField inf = inflateCost(obstacles);
+    for (const auto& kv : inf) {
+        Cell gc = toGrid(Cell{ kv.first.first, kv.first.second }, m.offset);
+        m.soft[{ gc.x, gc.y }] += kv.second;
+    }
+    for (const auto& kv : dyn) {
+        Cell gc = toGrid(Cell{ kv.first.first, kv.first.second }, m.offset);
+        m.soft[{ gc.x, gc.y }] += kv.second;
+    }
+    return m;
+}
+
 Path planPath(const Grid& grid, Cell start, Cell goal) {
     getGps();       // current_x, current_y 채움
     getGoalGps();   // goal_x, goal_y 채움
