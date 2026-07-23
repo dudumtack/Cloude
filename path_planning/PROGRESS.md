@@ -34,6 +34,9 @@ make run          # 또는: cmake -B build && cmake --build build && ./build/run
 - `makeCurrentCell()` / `makeGoalCell()` / `buildCells()` — 현재/목적지 GPS로 셀 생성(현재 위치 = 원점).
 - `obstacleToCells()` — 장애물 1개(끝점 A/B)를 원점 기준 셀 목록으로 변환.
   A~B 선분을 반 칸 간격 샘플링. 아직 미사용.
+- `inflateCost()` — 장애물 셀 주변 소프트 비용(inflation) 층.
+  이웃(체비쇼프1)=+0.5, 바깥 한 겹(체비쇼프2)=+0.25, 중복 누적 허용.
+  반환은 `(x,y)→비용` sparse map. 아직 미사용(A* 비용에 더할 예정).
 - `planPath()` — 지금은 GPS→셀까지만 호출하고 **빈 경로 `{}` 반환**(A\* 루프 미구현).
 
 ## 설계 결정 / 제약 (이어갈 때 지킬 것)

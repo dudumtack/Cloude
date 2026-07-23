@@ -3,6 +3,8 @@
 #include "planner.hpp"
 
 #include <cmath>
+#include <map>
+#include <utility>
 
 namespace planning {
 
@@ -176,6 +178,29 @@ static std::vector<Cell> obstacleToCells(double a_dist, double a_dir,
         if (out.empty() || out.back() != c) out.push_back(c);  // 연속 중복 제거
     }
     return out;
+}
+
+// 장애물 셀 주변에 "가까울수록 큰" 소프트 비용을 깔아준다 (A*가 벽에 바짝 안 붙게).
+//   - 장애물 셀 바로 이웃(체비쇼프 거리 1) → +0.5
+//   - 그 바깥 한 겹(체비쇼프 거리 2)      → +0.25
+//   중복은 그대로 누적 — 여러 장애물이 겹치거나 코너 꼭짓점에서 값이 합쳐짐.
+//   반환: (x,y) → 누적 소프트 비용. 장애물 셀 자신(거리 0)은 넣지 않음(이동 불가라 별도 처리).
+static std::map<std::pair<int,int>, double>
+inflateCost(const std::vector<Cell>& obstacle_cells) {
+    std::map<std::pair<int,int>, double> field;
+    for (const Cell& o : obstacle_cells) {
+        for (int dy = -2; dy <= 2; ++dy) {
+            for (int dx = -2; dx <= 2; ++dx) {
+                int adx  = (dx < 0) ? -dx : dx;
+                int ady  = (dy < 0) ? -dy : dy;
+                int cheb = (adx > ady) ? adx : ady;   // 체비쇼프 거리 (감싸는 겹 번호)
+                double add = (cheb == 1) ? 0.5 : (cheb == 2) ? 0.25 : 0.0;
+                if (add == 0.0) continue;             // 중심(장애물 셀)만 제외
+                field[{o.x + dx, o.y + dy}] += add;   // 누적 (중복 허용)
+            }
+        }
+    }
+    return field;
 }
 
 Path planPath(const Grid& grid, Cell start, Cell goal) {
