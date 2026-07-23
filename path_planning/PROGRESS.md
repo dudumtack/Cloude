@@ -57,7 +57,10 @@ make run          # 또는: cmake -B build && cmake --build build && ./build/run
   - `DStarLite` — 목표에서 역방향 탐색. 셀별 `g`/`rhs` 맵, 2요소 키 `[min(g,rhs)+h+km, min(g,rhs)]`,
     lazy-deletion 우선순위 큐. `init`→`computeShortestPath`→`extractPath`.
     `edgeCost` = `stepCost` + 소프트비용(양끝 절반, 대칭). `soft` 인자로 inflate/dynamic 얹음.
-    `km`·상태 멤버 보유 → 로봇 루프에서 매 틱 부분 재계획 가능(replan 훅은 다음 단계).
+    `km`·상태 멤버 보유.
+  - **증분 재계획 완성**: `moveTo(new_start)`(km 보정) + `replan(changed_cells)`(바뀐 셀+이웃만
+    updateVertex 후 computeShortestPath). 검증: replan 결과 = 처음부터 계산과 **비용 동일(최적)**,
+    로봇 주행 메인 루프(이동 중 장애물 발견) 정상 도달, 30×30 국소변화 반복 시 **재계산 대비 ~12배 적게 확장**.
 - `planPath()` — **하네스 grid/start/goal 로 D\* Lite 1회 실행** → 경로 반환.
   GPS→셀(`buildCells`)은 여전히 호출하되 로봇 통합용 별도 트랙(아직 grid와 미연결).
   **테스트 4/5 통과, 경로 비용은 A\*와 동일(최적)**. 5번째 `unreachable`은 경로 없음이 정답(`{}`).
@@ -72,12 +75,12 @@ make run          # 또는: cmake -B build && cmake --build build && ./build/run
 - 정사각형↔직사각형, m↔cm 전환은 `CellSize` 한 곳에서만 바꾸면 되도록 유지.
 
 ## 다음 할 일 (순서 제안)
-1. **D\* 재계획 훅** — `replan(new_start, changed_cells)`: `km += h(last_start,new_start)` 갱신,
-   비용 바뀐 셀 주변 `updateVertex` 후 `computeShortestPath` 재호출(부분 갱신). ← D*의 핵심 이점.
-2. **격자 조립** — start/goal 바운딩 박스 + 마진으로 `Grid` 만들고, 정적/동적 장애물
+> D* Lite 알고리즘 자체는 **완성**(1회 계산 + 증분 재계획 + 로봇 메인 루프 검증). 이제 로봇 연결 단계.
+1. **격자 조립** — start/goal 바운딩 박스 + 마진으로 `Grid` 만들고, 정적/동적 장애물
    셀(`obstacleToCells`)을 찍고 `inflateCost`/`dynamicCost`로 `CostField` 생성.
-3. **소프트 비용 연결** — 위 `CostField`를 `planner.init(grid,start,goal,cell,soft)`로 전달.
-4. **셀↔월드 브리지** — 경로 셀을 월드(m)로(스케일만) 바꿔 `stepToward`로 주행.
+2. **소프트 비용 연결** — 위 `CostField`를 `planner.init(grid,start,goal,cell,soft)`로 전달.
+3. **셀↔월드 브리지** — 경로 셀을 월드(m)로(스케일만) 바꿔 `stepToward`로 주행.
+4. **로봇 루프 배선** — 매 틱: 센서 장애물 변화 감지 → `moveTo`+`replan` → `extractPath` → `stepToward`.
 5. **통합 결정** — GPS→셀 트랙과 하네스 grid/start/goal 을 실제로 어떻게 연결할지.
 6. (선택) **4방향 모드** — 지금 8방향 고정. `run_tests 4` 검증엔 대각선이 걸림.
 

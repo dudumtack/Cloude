@@ -384,6 +384,7 @@ struct DStarLite {
     CellSize    cell;
     CostField   soft;                               // 장애물 근접 소프트 비용(선택)
     Cell start, goal;
+    Cell last_;                                     // km 보정 기준점 (직전 start)
     double km = 0.0;                                // 키 보정치 (start 이동 누적)
 
     std::map<std::pair<int,int>, double> g_, rhs_;  // 셀 → g / rhs (없으면 INF)
@@ -437,7 +438,7 @@ struct DStarLite {
     // 초기화: 목표 rhs=0 으로 놓고 큐에 넣음.
     void init(const Grid& g, Cell s, Cell go,
               CellSize c = CellSize{}, const CostField& sf = CostField{}) {
-        grid = &g; start = s; goal = go; cell = c; soft = sf; km = 0.0;
+        grid = &g; start = s; goal = go; cell = c; soft = sf; km = 0.0; last_ = s;
         g_.clear(); rhs_.clear(); inU_.clear(); U_ = decltype(U_)();
         rhs_[{goal.x, goal.y}] = 0.0;
         qPush(goal, calcKey(goal));
@@ -486,6 +487,30 @@ struct DStarLite {
             path.push_back(s);
         }
         return (s == goal) ? path : Path{};
+    }
+
+    // ── 증분 재계획 (D* Lite의 핵심 이점) ──
+
+    // 로봇이 new_start 로 이동했을 때 호출: 키 보정치 km 누적.
+    //   h(직전 start, 새 start) 만큼 km 을 올려, 큐에 든 옛 키들을 버리지 않고 재사용.
+    void moveTo(Cell new_start) {
+        if (!(new_start == last_)) {
+            km += hCost(last_, new_start, cell);
+            last_ = new_start;
+        }
+        start = new_start;
+    }
+
+    // 지도가 바뀐 뒤(막힘/해제, 소프트 비용 변경) 부분 재계산.
+    //   grid/soft 는 호출 전에 외부에서 이미 갱신돼 있어야 함(soft 는 멤버라 직접 대입 가능).
+    //   changed = 값이 바뀐 셀들. 각 셀과 그 이웃의 rhs 가 영향받으므로 함께 updateVertex.
+    //   이후 computeShortestPath 는 큐에 남은 불일치 셀만 처리 → 전체 재탐색보다 싸다.
+    void replan(const std::vector<Cell>& changed) {
+        for (Cell c : changed) {
+            updateVertex(c);
+            for (Cell s : neighbors(*grid, c)) updateVertex(s);
+        }
+        computeShortestPath();
     }
 };
 
