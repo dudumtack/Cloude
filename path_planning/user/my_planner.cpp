@@ -279,8 +279,10 @@ static std::vector<Cell> obstacleToCells(double a_dist, double a_dir,
 // rviz2 클릭 목표로 "바라보고 → 전진 → 도착"하는 실제 로봇 제어(test_goto_point.cpp)의
 // 이동 메커니즘을 ROS 없이 순수 계산 함수로 옮긴 것. A*가 만든 경로의 각 웨이포인트를
 // 이 함수들로 하나씩 추종하면 로봇이 경로를 따라간다.
-//   프레임: 로봇 odom 좌표(x,y=m), yaw=rad.
-//   (planPath의 셀 좌표와는 "셀 → 월드(m)" 변환 + yaw/북 규약 맞추기로 연결 예정.)
+//   프레임: 로봇 odom 좌표(x=동/east, y=북/north, m).
+//   [규약 확정] odom yaw = 0 을 북쪽(+y)에 맞춤, 반시계(왼쪽)가 양수.
+//     → planner의 "북=+y"와 축·기준이 일치. 로봇 vyaw>0=왼쪽 회전과도 부호 일치.
+//     → 그래서 planPath의 셀 좌표 ↔ odom 월드는 "셀↔m 스케일"만 하면 됨(회전 불필요).
 
 // 로봇에 내릴 한 틱 분량의 이동 명령. sport_client_.Move(req_, vx, vy, vyaw)에 그대로 대응.
 struct MoveCmd {
@@ -292,9 +294,11 @@ struct MoveCmd {
 
 // 현재 위치 A(ax,ay)에서 방향 theta_current를 볼 때, 목표 B(bx,by)를 바라보려면
 // 몇 rad 돌아야 하는지 (-pi, pi] 로 반환. 양수 = 왼쪽, 음수 = 오른쪽이 최단.
+//   각도 규약: yaw = 0 이 북쪽(+y), 반시계(왼쪽)가 양수 (odom yaw 0 = 북).
+//   → 목표 방향각 = 북쪽 기준 각 = atan2(-Δx, Δy)  (북 target이면 0).
 static double computeYawDelta(double ax, double ay, double theta_current,
                              double bx, double by) {
-    double theta_target = std::atan2(by - ay, bx - ax);    // A→B 방향각 (world)
+    double theta_target = std::atan2(ax - bx, by - ay);    // A→B 방향각 (북=0, 반시계+)
     double delta = theta_target - theta_current;            // 현재 방향과의 차
     return std::atan2(std::sin(delta), std::cos(delta));    // (-pi,pi] 정규화 → 최단 회전
 }
