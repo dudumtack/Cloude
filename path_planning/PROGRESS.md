@@ -43,6 +43,13 @@ make run          # 또는: cmake -B build && cmake --build build && ./build/run
 - `dynamicCost()` — 동적 장애물 1개 → 소프트 비용 map.
   중심 두 겹 감싸 +0.7, 진행 방향으로 속도 비례 거리만큼 뻗으며 속도 비례 비용 추가(예측 위험구역).
   `inflateCost` 결과와 합칠 수 있음(중복 누적). 아직 미사용.
+- **주행(이동) 함수** — 실제 로봇 제어(`test_goto_point.cpp`, Unitree Go2 ROS2)의
+  "바라보고→전진→도착" 메커니즘을 ROS 없이 순수 함수로 옮김. 프레임: odom(m), yaw(rad).
+  - `MoveCmd{vx,vy,vyaw,arrived}` — 한 틱 이동 명령(로봇 `Move(vx,vy,vyaw)`에 대응).
+  - `computeYawDelta()` — 목표를 바라보는 최단 회전량 (-π,π].
+  - `distanceTo()` — 목표까지 수평 거리(m).
+  - `stepToward()` — 목표점 1개 향한 한 틱 명령(도착/회전/전진+보정). 상태 없이 매 틱 재판단.
+  - **연결 예정**: A* 경로의 셀 웨이포인트를 "셀→월드(m)" 변환 후 `stepToward`로 하나씩 추종.
 - `planPath()` — 지금은 GPS→셀까지만 호출하고 **빈 경로 `{}` 반환**(A\* 루프 미구현).
 
 ## 설계 결정 / 제약 (이어갈 때 지킬 것)

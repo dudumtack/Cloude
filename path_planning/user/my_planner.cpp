@@ -275,6 +275,61 @@ static std::vector<Cell> obstacleToCells(double a_dist, double a_dir,
     return out;
 }
 
+// ───────────────────── 주행(이동) 함수 ─────────────────────
+// rviz2 클릭 목표로 "바라보고 → 전진 → 도착"하는 실제 로봇 제어(test_goto_point.cpp)의
+// 이동 메커니즘을 ROS 없이 순수 계산 함수로 옮긴 것. A*가 만든 경로의 각 웨이포인트를
+// 이 함수들로 하나씩 추종하면 로봇이 경로를 따라간다.
+//   프레임: 로봇 odom 좌표(x,y=m), yaw=rad.
+//   (planPath의 셀 좌표와는 "셀 → 월드(m)" 변환 + yaw/북 규약 맞추기로 연결 예정.)
+
+// 로봇에 내릴 한 틱 분량의 이동 명령. sport_client_.Move(req_, vx, vy, vyaw)에 그대로 대응.
+struct MoveCmd {
+    double vx      = 0.0;    // 전진 속도 (m/s)
+    double vy      = 0.0;    // 좌우 속도 (m/s) — 여기선 0
+    double vyaw    = 0.0;    // 회전 속도 (rad/s), 양수 = 왼쪽
+    bool   arrived = false;  // 목표 도달 시 true (이때 vx=vy=vyaw=0)
+};
+
+// 현재 위치 A(ax,ay)에서 방향 theta_current를 볼 때, 목표 B(bx,by)를 바라보려면
+// 몇 rad 돌아야 하는지 (-pi, pi] 로 반환. 양수 = 왼쪽, 음수 = 오른쪽이 최단.
+static double computeYawDelta(double ax, double ay, double theta_current,
+                             double bx, double by) {
+    double theta_target = std::atan2(by - ay, bx - ax);    // A→B 방향각 (world)
+    double delta = theta_target - theta_current;            // 현재 방향과의 차
+    return std::atan2(std::sin(delta), std::cos(delta));    // (-pi,pi] 정규화 → 최단 회전
+}
+
+// 로봇 현재 자세(rx,ry)에서 목표점(tx,ty)까지 남은 수평 거리 (m).
+static double distanceTo(double rx, double ry, double tx, double ty) {
+    return std::hypot(tx - rx, ty - ry);
+}
+
+// 목표점 하나를 향한 한 틱 이동 명령을 만든다.
+// test_goto_point.cpp의 phase 1·2 로직을 상태 없이 매 틱 재판단하는 형태로 정리:
+//   - 도착 반경 안        → 정지(arrived=true)
+//   - 목표를 아직 안 봄   → 제자리 회전만 (전진 없음)
+//   - 목표를 보고 있음    → 전진 + 방향 미세 보정
+static MoveCmd stepToward(double rx, double ry, double yaw, double tx, double ty) {
+    const double ARRIVE_R = 0.2;   // 도착 판정 반경 (m)
+    const double FACE_TOL = 0.1;   // 목표를 "보고 있다" 판정 (rad, 약 6°)
+    const double TURN_SPD = 0.7;   // 제자리 회전 속도 (rad/s)
+    const double FWD_SPD  = 0.5;   // 전진 속도 (m/s)
+
+    MoveCmd cmd;
+    double dist      = distanceTo(rx, ry, tx, ty);
+    double yaw_delta = computeYawDelta(rx, ry, yaw, tx, ty);
+
+    if (dist < ARRIVE_R) {                          // 도착
+        cmd.arrived = true;
+    } else if (std::fabs(yaw_delta) > FACE_TOL) {   // 아직 목표를 안 봄 → 회전만
+        cmd.vyaw = (yaw_delta > 0) ? TURN_SPD : -TURN_SPD;
+    } else {                                        // 목표를 봄 → 전진 + 보정
+        cmd.vx   = FWD_SPD;
+        cmd.vyaw = 0.5 * yaw_delta;
+    }
+    return cmd;
+}
+
 Path planPath(const Grid& grid, Cell start, Cell goal) {
     getGps();       // current_x, current_y 채움
     getGoalGps();   // goal_x, goal_y 채움
