@@ -46,6 +46,73 @@ static double hCost(Cell x, Cell goal, CellSize cell = CellSize{}) {
     return dmin * diag + straight;   // 대각선 dmin번 + 남는 축 직선
 }
 
+// 장애물 셀 주변에 "가까울수록 큰" 소프트 비용을 깔아준다 (A*가 벽에 바짝 안 붙게).
+//   - 장애물 셀 바로 이웃(체비쇼프 거리 1) → +0.5
+//   - 그 바깥 한 겹(체비쇼프 거리 2)      → +0.25
+//   중복은 그대로 누적 — 여러 장애물이 겹치거나 코너 꼭짓점에서 값이 합쳐짐.
+//   반환: (x,y) → 누적 소프트 비용. 장애물 셀 자신(거리 0)은 넣지 않음(이동 불가라 별도 처리).
+static std::map<std::pair<int,int>, double>
+inflateCost(const std::vector<Cell>& obstacle_cells) {
+    std::map<std::pair<int,int>, double> field;
+    for (const Cell& o : obstacle_cells) {
+        for (int dy = -2; dy <= 2; ++dy) {
+            for (int dx = -2; dx <= 2; ++dx) {
+                int adx  = (dx < 0) ? -dx : dx;
+                int ady  = (dy < 0) ? -dy : dy;
+                int cheb = (adx > ady) ? adx : ady;   // 체비쇼프 거리 (감싸는 겹 번호)
+                double add = (cheb == 1) ? 0.5 : (cheb == 2) ? 0.25 : 0.0;
+                if (add == 0.0) continue;             // 중심(장애물 셀)만 제외
+                field[{o.x + dx, o.y + dy}] += add;   // 누적 (중복 허용)
+            }
+        }
+    }
+    return field;
+}
+
+// 동적 장애물 하나를 소프트 비용 층으로 변환.
+//   - 장애물 중심을 두 겹(체비쇼프 거리 1,2)으로 감싸 각 셀에 +0.7 (정적보다 더 크게 회피).
+//   - 진행 방향으로 "속도에 비례하는 거리"만큼 뻗으며, 각 셀에 "속도에 비례하는 비용"을
+//     추가 → 물체가 갈 곳을 미리 피하는 예측 위험구역.
+//   반환: (x,y) → 누적 소프트 비용. inflateCost 결과와 그대로 합칠 수 있음(중복 누적).
+static std::map<std::pair<int,int>, double>
+dynamicCost(double dist, double bearing, double heading, double speed,
+            CellSize cell = CellSize{}) {
+    std::map<std::pair<int,int>, double> field;
+
+    double mpu  = metersPerUnit(cell.unit);
+    double cx_m = dist * std::sin(bearing);   // 장애물 중심 (미터, 원점 기준)
+    double cy_m = dist * std::cos(bearing);
+    int ccx = static_cast<int>(std::lround(cx_m / (cell.w * mpu)));
+    int ccy = static_cast<int>(std::lround(cy_m / (cell.h * mpu)));
+
+    // (1) 두 겹 감싸기 → 0.7
+    for (int dy = -2; dy <= 2; ++dy) {
+        for (int dx = -2; dx <= 2; ++dx) {
+            int adx  = (dx < 0) ? -dx : dx;
+            int ady  = (dy < 0) ? -dy : dy;
+            int cheb = (adx > ady) ? adx : ady;
+            if (cheb == 1 || cheb == 2) field[{ccx + dx, ccy + dy}] += 0.7;
+        }
+    }
+
+    // (2) 진행 방향 예측 위험구역: 뻗는 거리 ∝ 속도, 셀 비용 ∝ 속도.
+    const double TIME_HORIZON = 2.0;   // 초: 몇 초 앞을 내다볼지
+    const double SPEED_GAIN   = 0.5;   // (m/s)당 더해줄 비용
+    double hx = std::sin(heading);     // 진행 단위벡터
+    double hy = std::cos(heading);
+    double step_m = ((cell.w < cell.h) ? cell.w : cell.h) * mpu;   // 한 칸(작은 축) 미터
+    double reach_m = speed * TIME_HORIZON;                          // 예측 이동 거리 (m)
+    int steps = (step_m > 0.0) ? static_cast<int>(std::lround(reach_m / step_m)) : 0;
+    for (int i = 1; i <= steps; ++i) {
+        double fx_m = cx_m + hx * i * step_m;
+        double fy_m = cy_m + hy * i * step_m;
+        int fx = static_cast<int>(std::lround(fx_m / (cell.w * mpu)));
+        int fy = static_cast<int>(std::lround(fy_m / (cell.h * mpu)));
+        field[{fx, fy}] += speed * SPEED_GAIN;                      // 속도 비례 비용
+    }
+    return field;
+}
+
 // 가변 셀: 위치(고정) + 탐색 중 갱신되는 비용/부모.
 struct Node {
     Cell   pos;
@@ -206,73 +273,6 @@ static std::vector<Cell> obstacleToCells(double a_dist, double a_dir,
         if (out.empty() || out.back() != c) out.push_back(c);  // 연속 중복 제거
     }
     return out;
-}
-
-// 장애물 셀 주변에 "가까울수록 큰" 소프트 비용을 깔아준다 (A*가 벽에 바짝 안 붙게).
-//   - 장애물 셀 바로 이웃(체비쇼프 거리 1) → +0.5
-//   - 그 바깥 한 겹(체비쇼프 거리 2)      → +0.25
-//   중복은 그대로 누적 — 여러 장애물이 겹치거나 코너 꼭짓점에서 값이 합쳐짐.
-//   반환: (x,y) → 누적 소프트 비용. 장애물 셀 자신(거리 0)은 넣지 않음(이동 불가라 별도 처리).
-static std::map<std::pair<int,int>, double>
-inflateCost(const std::vector<Cell>& obstacle_cells) {
-    std::map<std::pair<int,int>, double> field;
-    for (const Cell& o : obstacle_cells) {
-        for (int dy = -2; dy <= 2; ++dy) {
-            for (int dx = -2; dx <= 2; ++dx) {
-                int adx  = (dx < 0) ? -dx : dx;
-                int ady  = (dy < 0) ? -dy : dy;
-                int cheb = (adx > ady) ? adx : ady;   // 체비쇼프 거리 (감싸는 겹 번호)
-                double add = (cheb == 1) ? 0.5 : (cheb == 2) ? 0.25 : 0.0;
-                if (add == 0.0) continue;             // 중심(장애물 셀)만 제외
-                field[{o.x + dx, o.y + dy}] += add;   // 누적 (중복 허용)
-            }
-        }
-    }
-    return field;
-}
-
-// 동적 장애물 하나를 소프트 비용 층으로 변환.
-//   - 장애물 중심을 두 겹(체비쇼프 거리 1,2)으로 감싸 각 셀에 +0.7 (정적보다 더 크게 회피).
-//   - 진행 방향으로 "속도에 비례하는 거리"만큼 뻗으며, 각 셀에 "속도에 비례하는 비용"을
-//     추가 → 물체가 갈 곳을 미리 피하는 예측 위험구역.
-//   반환: (x,y) → 누적 소프트 비용. inflateCost 결과와 그대로 합칠 수 있음(중복 누적).
-static std::map<std::pair<int,int>, double>
-dynamicCost(double dist, double bearing, double heading, double speed,
-            CellSize cell = CellSize{}) {
-    std::map<std::pair<int,int>, double> field;
-
-    double mpu  = metersPerUnit(cell.unit);
-    double cx_m = dist * std::sin(bearing);   // 장애물 중심 (미터, 원점 기준)
-    double cy_m = dist * std::cos(bearing);
-    int ccx = static_cast<int>(std::lround(cx_m / (cell.w * mpu)));
-    int ccy = static_cast<int>(std::lround(cy_m / (cell.h * mpu)));
-
-    // (1) 두 겹 감싸기 → 0.7
-    for (int dy = -2; dy <= 2; ++dy) {
-        for (int dx = -2; dx <= 2; ++dx) {
-            int adx  = (dx < 0) ? -dx : dx;
-            int ady  = (dy < 0) ? -dy : dy;
-            int cheb = (adx > ady) ? adx : ady;
-            if (cheb == 1 || cheb == 2) field[{ccx + dx, ccy + dy}] += 0.7;
-        }
-    }
-
-    // (2) 진행 방향 예측 위험구역: 뻗는 거리 ∝ 속도, 셀 비용 ∝ 속도.
-    const double TIME_HORIZON = 2.0;   // 초: 몇 초 앞을 내다볼지
-    const double SPEED_GAIN   = 0.5;   // (m/s)당 더해줄 비용
-    double hx = std::sin(heading);     // 진행 단위벡터
-    double hy = std::cos(heading);
-    double step_m = ((cell.w < cell.h) ? cell.w : cell.h) * mpu;   // 한 칸(작은 축) 미터
-    double reach_m = speed * TIME_HORIZON;                          // 예측 이동 거리 (m)
-    int steps = (step_m > 0.0) ? static_cast<int>(std::lround(reach_m / step_m)) : 0;
-    for (int i = 1; i <= steps; ++i) {
-        double fx_m = cx_m + hx * i * step_m;
-        double fy_m = cy_m + hy * i * step_m;
-        int fx = static_cast<int>(std::lround(fx_m / (cell.w * mpu)));
-        int fy = static_cast<int>(std::lround(fy_m / (cell.h * mpu)));
-        field[{fx, fy}] += speed * SPEED_GAIN;                      // 속도 비례 비용
-    }
-    return field;
 }
 
 Path planPath(const Grid& grid, Cell start, Cell goal) {
