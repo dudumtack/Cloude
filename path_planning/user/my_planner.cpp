@@ -2,8 +2,11 @@
 
 #include "planner.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <functional>
 #include <map>
+#include <queue>
 #include <utility>
 
 namespace planning {
@@ -334,18 +337,100 @@ static MoveCmd stepToward(double rx, double ry, double yaw, double tx, double ty
     return cmd;
 }
 
+// ───────────────────── A* 본체 ─────────────────────
+
+// 소프트 비용 맵(inflateCost/dynamicCost 결과)을 합쳐 쓰는 타입.
+using CostField = std::map<std::pair<int,int>, double>;
+
+// 셀 c 의 소프트 비용 (없으면 0).
+static double softAt(const CostField& field, Cell c) {
+    auto it = field.find({c.x, c.y});
+    return (it == field.end()) ? 0.0 : it->second;
+}
+
+// 셀 c 에서 실제로 갈 수 있는 8방향 이웃.
+//   - 격자 밖/장애물 칸 제외.
+//   - 대각선은 양옆 직선 칸이 둘 다 뚫려 있어야 인정 → 벽 모서리 파고들기 방지
+//     (validator 규칙 3-1과 동일 규약).
+static std::vector<Cell> neighbors(const Grid& grid, Cell c) {
+    static const int DX[8] = {  1, -1,  0,  0,   1,  1, -1, -1 };
+    static const int DY[8] = {  0,  0,  1, -1,   1, -1,  1, -1 };
+    std::vector<Cell> out;
+    out.reserve(8);
+    for (int i = 0; i < 8; ++i) {
+        Cell n{ c.x + DX[i], c.y + DY[i] };
+        if (!grid.isFree(n)) continue;               // 범위 밖 또는 장애물
+        if (DX[i] != 0 && DY[i] != 0) {              // 대각선
+            Cell sideA{ c.x + DX[i], c.y };
+            Cell sideB{ c.x, c.y + DY[i] };
+            if (!grid.isFree(sideA) || !grid.isFree(sideB)) continue;  // 모서리 뚫기 방지
+        }
+        out.push_back(n);
+    }
+    return out;
+}
+
+// A* 경로 탐색: start → goal 최소비용 경로를 셀 목록으로 반환(없으면 {}).
+//   - g = gCost(실제 이동) + soft(장애물 근접 소프트 비용), h = hCost(옥타일 추정).
+//   - Node 풀(vector) + parent 인덱스로 확장하고, 마지막에 parent를 거슬러 경로 복원.
+//   - open list = f 최소 힙. 이미 더 좋은 g로 방문한 셀은 건너뜀(lazy deletion).
+static Path aStar(const Grid& grid, Cell start, Cell goal,
+                  CellSize cell = CellSize{}, const CostField& soft = CostField{}) {
+    if (!grid.isFree(start) || !grid.isFree(goal)) return {};   // 시작/목표가 막힘
+
+    std::vector<Node> pool;                        // 노드 풀 (parent = 이 벡터의 인덱스)
+    std::map<std::pair<int,int>, int> best;        // 셀 → 지금까지 최선(최소 g) 노드 인덱스
+
+    // open list: (f, 풀 인덱스) 최소 힙.
+    using Item = std::pair<double, int>;
+    std::priority_queue<Item, std::vector<Item>, std::greater<Item>> open;
+
+    pool.push_back(makeNode(start, 0.0, hCost(start, goal, cell), -1));
+    best[{start.x, start.y}] = 0;
+    open.push({ pool[0].f, 0 });
+
+    while (!open.empty()) {
+        int idx = open.top().second;
+        open.pop();
+        Node cur = pool[idx];
+        std::pair<int,int> ckey{ cur.pos.x, cur.pos.y };
+
+        if (best[ckey] != idx) continue;   // 이 셀의 더 나은 노드가 이미 확정됨 → stale 스킵
+
+        if (cur.pos == goal) {             // 목표 도달 → parent 거슬러 경로 복원
+            Path path;
+            for (int i = idx; i != -1; i = pool[i].parent) path.push_back(pool[i].pos);
+            std::reverse(path.begin(), path.end());
+            return path;
+        }
+
+        for (Cell nb : neighbors(grid, cur.pos)) {
+            double g_new = gCost(cur.g, cur.pos, nb, cell) + softAt(soft, nb);
+            std::pair<int,int> nkey{ nb.x, nb.y };
+
+            auto it = best.find(nkey);
+            if (it != best.end() && pool[it->second].g <= g_new) continue;  // 기존이 더 좋음
+
+            int nidx = static_cast<int>(pool.size());
+            pool.push_back(makeNode(nb, g_new, hCost(nb, goal, cell), idx));
+            best[nkey] = nidx;
+            open.push({ pool[nidx].f, nidx });
+        }
+    }
+    return {};   // open 이 비면 경로 없음
+}
+
 Path planPath(const Grid& grid, Cell start, Cell goal) {
     getGps();       // current_x, current_y 채움
     getGoalGps();   // goal_x, goal_y 채움
 
     Cell current_cell, goal_cell;
-    buildCells(current_cell, goal_cell);   // GPS → 셀
-
-    (void)grid;
-    (void)start;
-    (void)goal;
+    buildCells(current_cell, goal_cell);   // GPS → 셀 (로봇 통합용 별도 트랙: 아직 grid와 미연결)
     (void)current_cell; (void)goal_cell;
-    return {};
+
+    // A* 본체: 하네스가 준 grid/start/goal 위에서 최소비용 경로 탐색.
+    // (장애물 소프트 비용을 쓰려면 aStar(..., cell, soft_field) 형태로 넘기면 됨.)
+    return aStar(grid, start, goal);
 }
 
 } // namespace planning

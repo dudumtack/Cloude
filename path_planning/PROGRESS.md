@@ -51,7 +51,14 @@ make run          # 또는: cmake -B build && cmake --build build && ./build/run
   - `distanceTo()` — 목표까지 수평 거리(m).
   - `stepToward()` — 목표점 1개 향한 한 틱 명령(도착/회전/전진+보정). 상태 없이 매 틱 재판단.
   - **연결 예정**: A* 경로의 셀 웨이포인트를 "셀↔m 스케일"만으로 월드화(회전 불필요) 후 `stepToward`로 추종.
-- `planPath()` — 지금은 GPS→셀까지만 호출하고 **빈 경로 `{}` 반환**(A\* 루프 미구현).
+- **A\* 본체** (`neighbors` / `softAt` / `aStar` + `CostField`) — **완성**.
+  - `neighbors()` — 8방향 이웃 + 대각선 모서리 뚫기 방지(validator 규칙 3-1 동일).
+  - `aStar()` — `Node` 풀(vector)+parent 인덱스, f 최소 힙(open list), lazy deletion,
+    g=`gCost`+소프트비용 / h=`hCost`, goal 도달 시 parent 거슬러 경로 복원.
+    `CostField soft` 인자로 `inflateCost`/`dynamicCost` 결과를 얹을 수 있음(기본 빈 맵).
+- `planPath()` — **하네스 grid/start/goal 위에서 `aStar` 실행** → 경로 반환.
+  GPS→셀(`buildCells`)은 여전히 호출하되 로봇 통합용 별도 트랙(아직 grid와 미연결).
+  **테스트 4/5 통과** (5번째 `unreachable`은 경로가 없는 게 정답 → `{}` 반환, 정상).
 
 ## 설계 결정 / 제약 (이어갈 때 지킬 것)
 - **GPS 함수는 사용자 것** — 로직 채우지 말고 가정만 유지.
@@ -62,11 +69,14 @@ make run          # 또는: cmake -B build && cmake --build build && ./build/run
 - 정사각형↔직사각형, m↔cm 전환은 `CellSize` 한 곳에서만 바꾸면 되도록 유지.
 
 ## 다음 할 일 (순서 제안)
-1. **이웃 탐색** — 현재 셀의 8방향 이웃 + 대각선 모서리 뚫기 방지.
-2. **open list** — f 최소 노드부터 꺼내는 우선순위 큐.
-3. **A\* 메인 루프** — `gCost`/`hCost`/`makeNode` 활용해 확장 + 경로 복원.
-   (이때 현재 unused 경고: `gCost`/`hCost`/`makeNode` 가 사라짐)
-4. **통합 결정** — 하네스가 주는 `start/goal` 과 GPS→셀 결과를 어떻게 연결할지.
+1. **격자 조립** — start/goal 바운딩 박스 + 마진으로 `Grid` 만들고, 정적/동적 장애물
+   셀(`obstacleToCells`)을 찍고 `inflateCost`/`dynamicCost`로 `CostField` 생성.
+2. **소프트 비용 A\*에 연결** — 위 `CostField`를 `aStar(grid,start,goal,cell,soft)`에 전달.
+3. **셀↔월드 브리지** — A\* 경로 셀을 월드(m)로(스케일만) 바꿔 `stepToward`로 주행.
+4. **통합 결정** — GPS→셀 트랙과 하네스 grid/start/goal 을 실제로 어떻게 연결할지.
+5. (선택) **4방향 모드** — 지금 A\*는 8방향 고정. `run_tests 4` 검증엔 대각선이 걸림.
 
 ## 참고
-- 빌드 시 `gCost`/`hCost`/`makeNode` "defined but not used" 경고는 A\* 루프 전까지 **정상**.
+- `gCost`/`hCost`/`makeNode` 는 이제 `aStar`가 사용 → 관련 unused 경고 사라짐.
+- 아직 미사용(경고 정상): `obstacleToCells`, `inflateCost`, `dynamicCost`, 주행 함수들,
+  동적/정적 장애물 스텁 — 격자 조립·주행 연결 단계에서 붙는다.
