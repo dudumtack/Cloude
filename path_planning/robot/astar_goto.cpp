@@ -43,6 +43,13 @@
 #include <utility>
 #include <vector>
 
+#include <rclcpp/rclcpp.hpp>
+
+// RViz2 시각화용 메시지 (경로/목적지)
+#include <nav_msgs/msg/path.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
+#include <visualization_msgs/msg/marker.hpp>
+
 #include <unitree/robot/channel/channel_factory.hpp>
 #include <unitree/robot/channel/channel_subscriber.hpp>
 #include <unitree/idl/ros2/PointCloud2_.hpp>
@@ -52,6 +59,7 @@
 #include "my_planner.cpp"
 
 using planning::Cell;
+using planning::Path;
 
 #define TOPIC_CLOUD_DESKEWED "rt/utlidar/cloud_deskewed"
 
@@ -169,8 +177,90 @@ class LidarObstacles {
   float front_dist_{1e9f};
 };
 
+// ───────── RViz2 시각화: A* 경로 + 목적지 (fixed frame = "odom") ─────────
+//   dstar_goto.cpp 의 PublishPath / PublishGoal 를 이식.
+//   노드/격자 조립이 아직 없으므로, 셀↔월드 브리지에 필요한 컨텍스트
+//   (offset·원점·셀크기)를 SetFrame 으로 외부에서 주입해 결합을 끊었다.
+//   → 격자 조립 조각이 붙으면 그때 정해지는 map.offset / origin / cell_res 를
+//      매 계획마다 SetFrame 으로 넘기면 그대로 동작.
+//   토픽:  astar/path (nav_msgs/Path) · astar/goal (visualization_msgs/Marker)
+class AStarViz {
+ public:
+  explicit AStarViz(rclcpp::Node *node) : node_(node) {
+    path_pub_ = node->create_publisher<nav_msgs::msg::Path>("astar/path", 1);
+    goal_pub_ =
+        node->create_publisher<visualization_msgs::msg::Marker>("astar/goal", 1);
+  }
+
+  // 셀↔월드 브리지 컨텍스트를 설정한다.
+  //   grid_offset : 격자 (0,0) 이 가리키는 원점기준 셀 (셀좌표 = 그리드인덱스 + offset)
+  //   origin_x/y  : 에피소드 고정 원점 (odom, m)
+  //   cell_res    : 셀 한 변 길이 (m)
+  void SetFrame(Cell grid_offset, double origin_x, double origin_y,
+                double cell_res) {
+    offset_   = grid_offset;
+    origin_x_ = origin_x;
+    origin_y_ = origin_y;
+    res_      = cell_res;
+  }
+
+  // A* 경로(그리드 인덱스 목록)를 odom 프레임 Path 로 발행.
+  void PublishPath(const Path &path) {
+    nav_msgs::msg::Path msg;
+    msg.header.stamp    = node_->now();
+    msg.header.frame_id = "odom";
+    for (const Cell &c : path) {
+      geometry_msgs::msg::PoseStamped ps;
+      ps.header = msg.header;
+      double wx, wy;
+      gridToOdom(c, wx, wy);
+      ps.pose.position.x    = wx;
+      ps.pose.position.y    = wy;
+      ps.pose.orientation.w = 1.0;
+      msg.poses.push_back(ps);
+    }
+    path_pub_->publish(msg);
+  }
+
+  // 목표 셀(그리드 인덱스)을 빨간 구 Marker 로 발행.
+  void PublishGoal(Cell goal_grid) {
+    double gx, gy;
+    gridToOdom(goal_grid, gx, gy);
+    visualization_msgs::msg::Marker m;
+    m.header.stamp    = node_->now();
+    m.header.frame_id = "odom";
+    m.ns     = "astar";
+    m.id     = 0;
+    m.type   = visualization_msgs::msg::Marker::SPHERE;
+    m.action = visualization_msgs::msg::Marker::ADD;
+    m.pose.position.x    = gx;
+    m.pose.position.y    = gy;
+    m.pose.position.z    = 0.1;
+    m.pose.orientation.w = 1.0;
+    m.scale.x = m.scale.y = m.scale.z = 0.3;
+    m.color.r = 1.0;  m.color.g = 0.2;  m.color.b = 0.2;  m.color.a = 1.0;
+    goal_pub_->publish(m);
+  }
+
+ private:
+  // 그리드 인덱스 → odom 월드(m). 그리드→원점기준 셀(+offset)→미터(×res)+원점.
+  //   (격자 조립 조각의 toCell(g,offset) 과 동일 계산을 인라인.)
+  void gridToOdom(Cell g, double &wx, double &wy) const {
+    wx = origin_x_ + static_cast<double>(g.x + offset_.x) * res_;
+    wy = origin_y_ + static_cast<double>(g.y + offset_.y) * res_;
+  }
+
+  rclcpp::Node *node_;
+  rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub_;
+  rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr goal_pub_;
+  Cell   offset_{0, 0};
+  double origin_x_{0.0}, origin_y_{0.0}, res_{0.25};
+};
+
 // ───────── 다음 조각 여기부터 ─────────
 //   · buildLocalMapFromLidar(start, goal, obstacles, margin)  — 격자 조립
 //   · odom 주행 헬퍼(computeYawDeltaOdom / stepTowardOdom)
 //   · AStarGotoNode  — odom 구독 + 라이다 + A* 재계획 루프 + SportClient
+//                       (루프에서 AStarViz.SetFrame → PublishPath/PublishGoal 호출)
 //   · main()         — ChannelFactory::Init → rclcpp::init → spin
+//   · (선택) PublishMap(OccupancyGrid) / PublishTf(로봇 pose) — 격자·로봇 표시
